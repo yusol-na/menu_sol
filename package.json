@@ -1,0 +1,28 @@
+{
+  "name": "test",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "- index.js: 서버 시작점\r - routes/analyze.js: 이미지 업로드 및 분석 API\r - yolomock.js: YOLO 연결 예정 파일\r - ocrmock.js: OCR 연결 예정 파일\r - uploads/: 이미지 임시 저장 디렉토리",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "espress": "^0.0.0",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "multer": "^2.0.2",
+    "mysql2": "^3.14.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yusol-na/menu_sol.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yusol-na/menu_sol/issues"
+  },
+  "homepage": "https://github.com/yusol-na/menu_sol#readme"
+}
