@@ -4,7 +4,7 @@ const path = require("path");
 const fs = require("fs");
 const router = express.Router();
 const runYOLO = require("../yolomock");
-const runOCR = require("../ocrmock");
+const runOCR = require("./ocrmock");
 
 // 업로드 디렉토리 설정
 const upload = multer({

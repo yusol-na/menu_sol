@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
-const analyzeRouter = require("./routes/analyze");
+const analyzeRouter = require("./analyze");
 
 const app = express();
 
