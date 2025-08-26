@@ -1,90 +1,92 @@
-const path = require("path");             
-const express = require("express");
-const jwt = require("jsonwebtoken");
-const bcrypt = require("bcrypt");
+const path = require('path');
+const express = require('express');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const db = require(path.join(__dirname, '..', 'db'));
 const router = express.Router();
 
-const db = require(path.join(__dirname, "..", "db"));  
-
-/* 비밀번호 유효성 검사 */
-function validatePassword(password) {
-  if (password.length < 8) return "비밀번호는 최소 8자 이상이어야 합니다.";
-  if (!/[A-Za-z]/.test(password)) return "비밀번호에 영문자를 포함해주세요.";
-  if (!/[0-9]/.test(password)) return "비밀번호에 숫자를 포함해주세요.";
-  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password))
-    return "비밀번호에 특수문자를 포함해주세요.";
-  return null;
-}
+const validate = require('../middleware/validate');              // ← 폴더명이 'middleware'인지 'middlewares'인지 확인!
+const { register, login } = require('../schemas/authSchemas');
+const { getActiveSecret } = require('../utils/jwtKeys');
+const { encryptContact } = require('../utils/crypto');           // AES 암호화 유틸
 
 /* 회원가입 */
-router.post("/register", async (req, res) => {
+router.post('/register', validate(register), async (req, res) => {
   try {
-    const { userid, password, name } = req.body;
+    const { username, password, name, email, mobile, homeTel } = req.body;
 
-    if (!userid || !password || !name) {
-      return res.status(400).json({ message: "아이디/비밀번호/이름은 필수입니다." });
+    // 1) 아이디 중복
+    const [dup] = await db.query('SELECT 1 FROM USERS WHERE USERNAME = ?', [username]);
+    if (dup.length) {
+      return res.status(409).json({ success:false, code:'DUP_ID', message:'이미 사용 중인 아이디입니다.' });
     }
 
-    const msg = validatePassword(password);
-    if (msg) return res.status(400).json({ message: msg });
-
-    const [dup] = await db.query("SELECT 1 FROM USERS WHERE USERID = ?", [userid]);
-    if (dup.length) return res.status(409).json({ message: "이미 사용 중인 아이디입니다." });
-
+    // 2) 비번 해시
     const hashed = await bcrypt.hash(password, 10);
 
+    // 3) DB 저장 (휴대폰/집전화는 암호화해서 컬럼명에 맞게)
     const [result] = await db.query(
-      "INSERT INTO USERS (USERID, PASSWORD_HASH, NAME) VALUES (?, ?, ?)",
-      [username, hashed, name]
+      `INSERT INTO USERS
+         (USERNAME, PASSWORD_HASH, NAME, EMAIL, MOBILE_ENCRYPTED, HOME_TEL_ENCRYPTED)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        username,
+        hashed,
+        name,
+        email,
+        encryptContact(mobile),                 // 필수
+        homeTel ? encryptContact(homeTel) : null // 선택(null 허용)
+      ]
     );
 
-    return res.status(201).json({ message: "회원가입 성공", userid: result.insertId });
+    return res.status(201).json({
+      success: true,
+      message: '회원가입 성공',
+      userId: result.insertId,
+    });
   } catch (err) {
-    console.error("회원가입 오류:", {
+    console.error('[REGISTER ERROR]', {
       code: err.code,
       message: err.message,
-      sql: err.sql,
       sqlMessage: err.sqlMessage,
+      sql: err.sql,
     });
-    return res.status(500).json({ message: "서버 내부 오류" });
+    return res.status(500).json({ success:false, code:'INTERNAL_ERROR', message:'서버 내부 오류' });
   }
 });
 
 /* 로그인 */
-router.post("/login", async (req, res) => {
+router.post('/login', validate(login), async (req, res) => {
   try {
-    const { userid, password } = req.body;
+    const { username, password } = req.body;
+    console.log('[LOGIN TRY]', username); // ← 누가 시도하는지
 
-    const [rows] = await db.query("SELECT * FROM USERS WHERE USERID = ?", [userid]);
-    if (!rows.length) return res.status(401).json({ message: "아이디 또는 비밀번호가 올바르지 않습니다." });
+    const [rows] = await db.query('SELECT * FROM USERS WHERE USERNAME = ?', [username]);
+    if (!rows.length) {
+      console.log('[LOGIN FAIL] no user');
+      return res.status(401).json({ success:false, code:'LOGIN_FAIL', message:'아이디/비번 오류' });
+    }
 
     const user = rows[0];
     const ok = await bcrypt.compare(password, user.PASSWORD_HASH);
-    if (!ok) return res.status(401).json({ message: "아이디 또는 비밀번호가 올바르지 않습니다." });
-
-    if (!process.env.JWT_SECRET) {
-      console.error("환경변수 JWT_SECRET 누락!");
-      return res.status(500).json({ message: "서버 내부 오류" });
+    if (!ok) {
+      console.log('[LOGIN FAIL] bad password');
+      return res.status(401).json({ success:false, code:'LOGIN_FAIL', message:'아이디/비번 오류' });
     }
 
+    const { kid, secret } = getActiveSecret();
     const token = jwt.sign(
-      { id: user.ID, userid: user.USERID, role: user.ROLE },
-      process.env.JWT_SECRET,
-      { expiresIn: "1h" }
+      { id: user.ID, username: user.USERNAME, role: user.ROLE },
+      secret,
+      { expiresIn: '1h', header: { kid } }
     );
 
-    return res.json({ token });
+    console.log('[LOGIN OK]', username);
+    return res.json({ success:true, token });
   } catch (err) {
-    console.error("로그인 오류:", {
-      code: err.code,
-      message: err.message,
-      sql: err.sql,
-      sqlMessage: err.sqlMessage,
-    });
-    return res.status(500).json({ message: "서버 내부 오류" });
+    console.error('로그인 오류:', err);
+    return res.status(500).json({ success:false, code:'INTERNAL_ERROR', message:'서버 내부 오류' });
   }
 });
 
-
 module.exports = router;
-

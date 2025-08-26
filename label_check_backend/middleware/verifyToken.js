@@ -1,40 +1,39 @@
-const jwt = require("jsonwebtoken");
+const jwt = require('jsonwebtoken');
+const { getSecretByKid } = require('../utils/jwtKeys');
 
-// 토큰 검증 미들웨어
+/*
+ verifyToken 미들웨어
+- 모든 요청에서 JWT 토큰이 있는지 확인하고
+- 올바른 서명키(kid 기반)로 검증한 뒤
+- 사용자 정보를 req.user에 저장
+ */
 function verifyToken(req, res, next) {
-  const authHeader = req.headers["authorization"];
-
-  // 1. Authorization 헤더 존재 여부 확인
-  if (!authHeader) {
-    return res.status(401).json({ message: "Authorization 헤더가 없습니다." });
+// 1. Authorization 헤더 확인: "Bearer <토큰>"
+  const h = req.headers.authorization || '';
+  const [scheme, token] = h.split(' ');
+  if (scheme !== 'Bearer' || !token) {
+    return res.status(401).json({ success:false, code:'NO_TOKEN', message:'토큰 없음' });
   }
-
-  // 2. Bearer 형식 체크
-  const [scheme, token] = authHeader.split(" ");
-  if (scheme !== "Bearer" || !token) {
-    return res.status(401).json({ message: "잘못된 인증 형식입니다. 'Bearer <token>'을 사용하세요." });
-  }
-
   try {
-    // 3. 토큰 검증 및 사용자 정보 추출
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // 2. 토큰 헤더 부분(Base64) 해석 → kid 추출
+    const headerB64 = token.split('.')[0]; // 토큰 구조: header.payload.signature
+    const decodedHeader = JSON.parse(Buffer.from(headerB64, 'base64').toString('utf8'));
+    const kid = decodedHeader.kid;
 
-    // 4. 토큰 payload에 필수 정보가 있는지 확인
-    if (!decoded || !decoded.id || !decoded.username) {
-      return res.status(403).json({ message: "토큰에 사용자 정보가 부족합니다." });
-    }
+    // 3. kid에 맞는 secret 가져오기
+    const secret = getSecretByKid(kid);
 
-    // 5. 요청 객체에 사용자 정보 저장
-    req.user = {
-      id: decoded.id,
-      username: decoded.username,
-      role: decoded.role || "user", // 역할 정보도 있다면 함께 저장
-    };
+    // 4. 토큰 검증
+    const payload = jwt.verify(token, secret);
 
-    next();
-  } catch (err) {
-    console.error("토큰 인증 실패:", err);
-    return res.status(403).json({ message: "유효하지 않은 토큰입니다." });
+    // 5. payload 유효성 확인
+    if (!payload?.id) throw new Error('payload invalid');
+
+    // 6. 요청 객체에 사용자 정보 저장
+    req.user = { id: payload.id, username: payload.username, role: payload.role || 'user' }; // role 없으면 기본 user
+    next(); // 다음 미들웨어/라우터 실행
+  } catch (e) {
+    return res.status(401).json({ success:false, code:'INVALID_TOKEN', message:'유효하지 않은 토큰' });
   }
 }
 

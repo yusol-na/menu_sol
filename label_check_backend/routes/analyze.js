@@ -1,56 +1,84 @@
-const express = require("express");
-const multer = require("multer");
-const fs = require("fs");
-const path = require("path");
-const router = express.Router();
-const runYOLO = require("../yolomock");
-const runOCR = require("../ocrmock");
+// routes/analyze.js
 
-// multer 설정: 업로드 파일 임시 저장 디렉토리
-const upload = multer({
-  dest: "uploads/",
+const express = require('express');
+const router = express.Router();
+
+const path = require('path');
+const fs = require('fs').promises;
+const multer = require('multer');
+
+const runYOLO = require('./yolomock');  
+const runOCR  = require('./ocrmock');
+
+const { BadRequest, InternalError } = require('../utils/errors');
+
+/* ── 업로드 폴더 준비 ── */
+// routes/ 폴더 기준으로 프로젝트 루트의 /uploads 사용
+const uploadDir = path.join(__dirname, '..', 'uploads');
+
+/* ── multer 설정 ── */
+const allowed = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const storage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    try {
+      // 폴더 없으면 생성
+      await fs.mkdir(uploadDir, { recursive: true });
+      cb(null, uploadDir);
+    } catch (e) {
+      cb(e);
+    }
+  },
+  filename: (req, file, cb) => {
+    // 간단한 파일명(타임스탬프_원본명)
+    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${Date.now()}_${safe}`);
+  },
 });
 
-// POST /analyze 라우터
-router.post("/", upload.single("image"), async (req, res) => {
-  console.log("분석 라우터에 도달함!");
-  console.log("req.file:", req.file);
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    if (!allowed.has(file.mimetype)) {
+      return cb(new Error('허용되지 않는 파일 형식입니다.'));
+    }
+    cb(null, true);
+  },
+});
 
-  try {
-    const imagePath = req.file.path;
+/* ── POST /analyze ── */
+router.post('/', (req, res, next) => {
+  // multer 에러를 표준 에러로 변환
+  upload.single('image')(req, res, async (err) => {
+    if (err) {
+      // MulterError 또는 일반 에러 모두 400으로 응답
+      return next(BadRequest(err.message || '업로드 실패'));
+    }
 
-    // 1. YOLO 분석 실행
-    console.log("YOLO 실행 시작");
-    const isDefective = await runYOLO(imagePath);
-    console.log("YOLO 결과:", isDefective);
+    if (!req.file) {
+      return next(BadRequest('파일이 필요합니다.'));
+    }
 
-    // 2. OCR 실행
-    console.log("OCR 실행 시작");
-    const ocrText = await runOCR(imagePath);
-    console.log("OCR 결과:", ocrText);
+    const filePath = req.file.path;
 
-    // 3. 분석 완료 후 파일 삭제 (보안 목적)
-    fs.unlink(imagePath, (err) => {
-      if (err) {
-        console.error("파일 삭제 오류:", err);
-      } else {
-        console.log("분석 완료 후 업로드 파일 삭제됨");
-      }
-    });
+    try {
+      // 1) YOLO: 불량 판정
+      const isDefective = await runYOLO(filePath);
+      // 2) OCR: 텍스트 추출
+      const ocrText = await runOCR(filePath);
 
-    // 4. 클라이언트에 결과 전송
-    return res.json({
-      result: isDefective ? "불량" : "정상",
-      ocrText,
-    });
-  } catch (error) {
-    console.error("분석 중 오류:", error);
-
-    return res.status(500).json({
-      result: "판정 오류",
-      ocrText: "OCR 실패",
-    });
-  }
+      return res.json({
+        success: true,
+        result: isDefective ? '불량' : '정상',
+        ocrText,
+      });
+    } catch (e) {
+      return next(InternalError('분석 중 오류가 발생했습니다.'));
+    } finally {
+      // 파일은 항상 정리
+      try { await fs.unlink(filePath); } catch (_) {}
+    }
+  });
 });
 
 module.exports = router;

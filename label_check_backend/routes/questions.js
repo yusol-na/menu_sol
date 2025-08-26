@@ -1,65 +1,77 @@
-const express = require("express");
-const router = express.Router(); 
-const db = require("../db");                        
-const { encryptContact, decryptContact } = require("../utils/crypto"); 
-const verifyToken = require("../middleware/verifyToken");  
-const { recordLog } = require("./logs");                  // logs.js에서 export한 recordLog 함수
+const express = require('express');
+const router = express.Router();
+const db = require('../db');
 
+// 미들웨어 & 유틸
+const validate = require('../middleware/validate');
+const { create, update } = require('../schemas/questionSchemas');
+const verifyToken = require('../middleware/verifyToken');
+const { encryptContact } = require('../utils/crypto');
+const { recordLog } = require('./logs');
+const { InternalError, Forbidden } = require('../utils/errors');
 
-
-// 질문 수정 API
-router.put("/:id", verifyToken, async (req, res) => {
-  const questionId = req.params.id;
-  const { type, title, content, company, q_contact } = req.body;
-  const userId = req.user.id;
-
+/* 질문 생성 (POST /questions) */
+router.post('/', verifyToken, validate(create), async (req, res, next) => {
   try {
-    // 사용자 소유 확인
-    const [existing] = await db.query("SELECT * FROM QUESTIONS WHERE ID = ? AND USER_ID = ?", [questionId, userId]);
-    if (!existing.length) {
-      return res.status(403).json({ message: "수정 권한이 없습니다." });
-    }
-
-    const encryptedContact = encryptContact(q_contact);
+    const { type, title, content, company, phone } = req.body;
+    const encPhone = phone ? encryptContact(phone) : null;
 
     await db.query(
-      `UPDATE QUESTIONS 
-       SET TYPE = ?, TITLE = ?, CONTENT = ?, COMPANY = ?, PHONE_ENCRYPTED = ?, UPDATED_AT = NOW()
-       WHERE ID = ?`,
-      [type, title, content, company, encryptedContact, questionId]
+      `INSERT INTO QUESTIONS (USER_ID, TYPE, TITLE, CONTENT, COMPANY, PHONE_ENCRYPTED)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [req.user.id, type, title, content, company || null, encPhone]
     );
 
-    await recordLog(questionId, "수정", userId);
-
-    res.json({ message: "질문이 수정되었습니다." });
+    return res.json({ success: true, message: '등록되었습니다.' });
   } catch (err) {
-    console.error("질문 수정 실패:", err);
-    res.status(500).json({ error: "질문 수정 실패" });
+    return next(InternalError('질문 등록 실패'));
   }
 });
 
-// 질문 삭제 API
-router.delete("/:id", verifyToken, async (req, res) => {
-  const questionId = req.params.id;
-  const userId = req.user.id;
-
+/* 질문 수정 (PUT /questions/:id) */
+router.put('/:id', verifyToken, validate(update), async (req, res, next) => {
+  const qid = req.params.id;
   try {
-    // 사용자 소유 확인
-    const [existing] = await db.query("SELECT * FROM QUESTIONS WHERE ID = ? AND USER_ID = ?", [questionId, userId]);
-    if (!existing.length) {
-      return res.status(403).json({ message: "삭제 권한이 없습니다." });
+    // 소유권 확인
+    const [own] = await db.query('SELECT USER_ID FROM QUESTIONS WHERE ID=?', [qid]);
+    if (!own.length || own[0].USER_ID !== req.user.id) {
+      return next(Forbidden('권한 없음'));
     }
 
-    await db.query("DELETE FROM QUESTIONS WHERE ID = ?", [questionId]);
+    const { type, title, content, company, phone } = req.body;
+    const encPhone = phone ? encryptContact(phone) : null;
 
-    await recordLog(questionId, "삭제", userId);
+    await db.query(
+      `UPDATE QUESTIONS
+         SET TYPE=?, TITLE=?, CONTENT=?, COMPANY=?, PHONE_ENCRYPTED=?, UPDATED_AT=NOW()
+       WHERE ID=?`,
+      [type, title, content, company || null, encPhone, qid]
+    );
 
-    res.json({ message: "질문이 삭제되었습니다." });
+    await recordLog(qid, '수정', req.user.id);
+    return res.json({ success: true, message: '수정되었습니다.' });
   } catch (err) {
-    console.error("질문 삭제 실패:", err);
-    res.status(500).json({ error: "질문 삭제 실패" });
+    return next(InternalError('질문 수정 실패'));
+  }
+});
+
+/* 질문 삭제 (DELETE /questions/:id) */
+router.delete('/:id', verifyToken, async (req, res, next) => {
+  const qid = req.params.id;
+  try {
+    // 소유권 확인
+    const [own] = await db.query('SELECT USER_ID FROM QUESTIONS WHERE ID=?', [qid]);
+    if (!own.length || own[0].USER_ID !== req.user.id) {
+      return next(Forbidden('권한 없음'));
+    }
+
+    await db.query('DELETE FROM QUESTIONS WHERE ID=?', [qid]);
+    await recordLog(qid, '삭제', req.user.id);
+
+    return res.json({ success: true, message: '삭제되었습니다.' });
+  } catch (err) {
+    return next(InternalError('질문 삭제 실패'));
   }
 });
 
 module.exports = router;
-

@@ -1,0 +1,56 @@
+/*
+parseKeys
+- .env 파일의 JWT_KEYS 값을 파싱해서 Map으로 저장
+- 예: JWT_KEYS="v1:secret123,v2:secret456"
+→ Map { 'v1' => 'secret123', 'v2' => 'secret456' }
+ */
+function parseKeys(env = process.env.JWT_KEYS) {
+  const map = new Map();
+  if (!env) return map;
+  env.split(',').forEach(pair => {
+    const [kid, secret] = pair.split(':');
+    if (kid && secret) map.set(kid.trim(), secret.trim());
+  });
+  return map;
+}
+const keys = parseKeys();
+
+/*
+getActiveKid
+ 현재 사용 중인 키의 ID(kid)를 반환
+- .env에 JWT_ACTIVE_KID가 있으면 그 값을 사용
+- 없으면 'default'라는 문자열을 반환
+ */
+function getActiveKid() {
+  return process.env.JWT_ACTIVE_KID || 'default';
+}
+
+/*
+getActiveSecret
+  현재 활성화된 kid에 해당하는 실제 비밀키(secret)를 반환
+- 없으면 에러 발생 → 설정 누락 방지
+- { kid, secret } 형태로 반환
+ */
+function getActiveSecret() {
+  const kid = getActiveKid();
+  const s = keys.get(kid);
+  if (!s) throw new Error(`JWT secret for kid=${kid} not found`);
+  return { kid, secret: s };
+}
+
+/*
+getSecretByKid
+ kid를 직접 지정해서 해당하는 비밀키(secret)를 반환
+- 주로 JWT 검증할 때 사용 (토큰 헤더에 있는 kid 값을 보고 맞는 키 꺼내오기)
+ */
+function getSecretByKid(kid) {
+  const s = keys.get(kid);
+  if (!s) throw new Error(`JWT secret for kid=${kid} not found`);
+  return s;
+}
+
+// export
+//- getActiveKid: 현재 사용 중인 키의 ID
+// - getActiveSecret: 현재 사용 중인 키와 비밀키
+// - getSecretByKid: 특정 kid에 해당하는 비밀키
+module.exports = { getActiveKid, getActiveSecret, getSecretByKid };

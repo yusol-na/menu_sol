@@ -35,3 +35,4 @@ router.get("/", verifyToken, isAdmin, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.recordLog = recordLog;

@@ -14,7 +14,7 @@ router.post("/answer", verifyToken, isAdmin, async (req, res) => {
       [question_id, req.user.id, content]
     );
 
-    // 질문 상태 업데이트 (답변 완료로)
+    // 질문 상태 업데이트 (답변 완료)
     await db.query(
       `UPDATE QUESTIONS SET IS_ANSWERED = true, ADMIN_VIEWED = true WHERE ID = ?`,
       [question_id]
